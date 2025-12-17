@@ -9,6 +9,209 @@ from datetime import datetime
 import json
 from typing import List, Dict, Optional
 
+# --- Helper Functions
+def make_request(
+    base_url: str,
+    endpoint: str,
+    method: str = "GET",
+    payload: Optional[Dict] = None,
+    auth_token: Optional[str] = None,
+    request_id: int = 0
+) -> Dict:
+    """Make a single HTTP request and return results"""
+    url = f"{base_url.rstrip('/')}/{endpoint.lstrip('/')}"
+    headers = {}
+    
+    if auth_token:
+        headers['Authorization'] = f'Bearer {auth_token}'
+    
+    if payload:
+        headers['Content-Type'] = 'application/json'
+    
+    start_time = time.time()
+    error = None
+    status_code = 0
+    response_text = ""
+    success = False
+    
+    try:
+        if method == "GET":
+            response = requests.get(url, headers=headers, timeout=30)
+        elif method == "POST":
+            response = requests.post(url, json=payload, headers=headers, timeout=30)
+        elif method == "PUT":
+            response = requests.put(url, json=payload, headers=headers, timeout=30)
+        elif method == "DELETE":
+            response = requests.delete(url, headers=headers, timeout=30)
+        else:
+            raise ValueError(f"Unsupported method: {method}")
+        
+        status_code = response.status_code
+        response_text = response.text[:500]  # Limit response text
+        success = status_code < 400
+        
+    except requests.exceptions.Timeout:
+        error = "Request timeout"
+    except requests.exceptions.ConnectionError:
+        error = "Connection error"
+    except requests.exceptions.RequestException as e:
+        error = str(e)
+    except Exception as e:
+        error = f"Unexpected error: {str(e)}"
+    
+    response_time = time.time() - start_time
+    
+    return {
+        'request_id': request_id,
+        'status_code': status_code,
+        'response_time': response_time,
+        'success': success,
+        'error': error,
+        'response_text': response_text
+    }
+
+
+def run_stress_test(
+    base_url: str,
+    endpoint: str,
+    num_requests: int,
+    concurrent_workers: int,
+    method: str = "GET",
+    payload: Optional[Dict] = None,
+    auth_token: Optional[str] = None,
+    delay_ms: int = 0
+) -> List[Dict]:
+    """Run concurrent stress test"""
+    results = []
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    with ThreadPoolExecutor(max_workers=concurrent_workers) as executor:
+        futures = []
+        
+        for i in range(num_requests):
+            if delay_ms > 0 and i > 0:
+                time.sleep(delay_ms / 1000.0)
+            
+            future = executor.submit(
+                make_request,
+                base_url=base_url,
+                endpoint=endpoint,
+                method=method,
+                payload=payload,
+                auth_token=auth_token,
+                request_id=i + 1
+            )
+            futures.append(future)
+        
+        completed = 0
+        for future in as_completed(futures):
+            result = future.result()
+            results.append(result)
+            completed += 1
+            progress_bar.progress(completed / num_requests)
+            status_text.text(f"Completed {completed}/{num_requests} requests...")
+    
+    progress_bar.empty()
+    status_text.empty()
+    
+    return results
+
+
+def load_page(
+    page_url: str,
+    auth_token: Optional[str] = None,
+    request_id: int = 0
+) -> Dict:
+    """Load a full page and return results"""
+    headers = {}
+    
+    if auth_token:
+        headers['Authorization'] = f'Bearer {auth_token}'
+    
+    # Set user agent to simulate browser
+    headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    
+    start_time = time.time()
+    error = None
+    status_code = 0
+    response_text = ""
+    success = False
+    content_length = 0
+    
+    try:
+        response = requests.get(page_url, headers=headers, timeout=60, allow_redirects=True)
+        status_code = response.status_code
+        content_length = len(response.content)
+        response_text = response.text[:1000]  # Limit response text
+        success = status_code < 400
+        
+        # Check if Streamlit iframe is present (basic check)
+        has_streamlit_iframe = 'streamlit' in response.text.lower() or 'iframe' in response.text.lower()
+        
+    except requests.exceptions.Timeout:
+        error = "Page load timeout (60s)"
+    except requests.exceptions.ConnectionError:
+        error = "Connection error"
+    except requests.exceptions.RequestException as e:
+        error = str(e)
+    except Exception as e:
+        error = f"Unexpected error: {str(e)}"
+    
+    response_time = time.time() - start_time
+    
+    return {
+        'request_id': request_id,
+        'status_code': status_code,
+        'response_time': response_time,
+        'success': success,
+        'error': error,
+        'response_text': response_text,
+        'content_length': content_length
+    }
+
+
+def run_page_load_test(
+    page_url: str,
+    num_requests: int,
+    concurrent_workers: int,
+    auth_token: Optional[str] = None,
+    delay_ms: int = 0
+) -> List[Dict]:
+    """Run concurrent page load stress test"""
+    results = []
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    with ThreadPoolExecutor(max_workers=concurrent_workers) as executor:
+        futures = []
+        
+        for i in range(num_requests):
+            if delay_ms > 0 and i > 0:
+                time.sleep(delay_ms / 1000.0)
+            
+            future = executor.submit(
+                load_page,
+                page_url=page_url,
+                auth_token=auth_token,
+                request_id=i + 1
+            )
+            futures.append(future)
+        
+        completed = 0
+        for future in as_completed(futures):
+            result = future.result()
+            results.append(result)
+            completed += 1
+            progress_bar.progress(completed / num_requests)
+            status_text.text(f"Completed {completed}/{num_requests} page loads...")
+    
+    progress_bar.empty()
+    status_text.empty()
+    
+    return results
+
+# --- Streamlit UI Code
 st.set_page_config(page_title="Wagtail Stress Tester", page_icon="⚡", layout="wide")
 st.title("⚡ Wagtail Integration Stress Tester")
 st.caption("Stress test your Wagtail dashboard page integration with concurrent requests")
@@ -294,206 +497,3 @@ with tab3:
                         st.metric("Avg Response Time", f"{avg_time:.2f}s")
     else:
         st.info("No test history yet. Run some stress tests to see history here.")
-
-
-# --- Helper Functions
-def make_request(
-    base_url: str,
-    endpoint: str,
-    method: str = "GET",
-    payload: Optional[Dict] = None,
-    auth_token: Optional[str] = None,
-    request_id: int = 0
-) -> Dict:
-    """Make a single HTTP request and return results"""
-    url = f"{base_url.rstrip('/')}/{endpoint.lstrip('/')}"
-    headers = {}
-    
-    if auth_token:
-        headers['Authorization'] = f'Bearer {auth_token}'
-    
-    if payload:
-        headers['Content-Type'] = 'application/json'
-    
-    start_time = time.time()
-    error = None
-    status_code = 0
-    response_text = ""
-    success = False
-    
-    try:
-        if method == "GET":
-            response = requests.get(url, headers=headers, timeout=30)
-        elif method == "POST":
-            response = requests.post(url, json=payload, headers=headers, timeout=30)
-        elif method == "PUT":
-            response = requests.put(url, json=payload, headers=headers, timeout=30)
-        elif method == "DELETE":
-            response = requests.delete(url, headers=headers, timeout=30)
-        else:
-            raise ValueError(f"Unsupported method: {method}")
-        
-        status_code = response.status_code
-        response_text = response.text[:500]  # Limit response text
-        success = status_code < 400
-        
-    except requests.exceptions.Timeout:
-        error = "Request timeout"
-    except requests.exceptions.ConnectionError:
-        error = "Connection error"
-    except requests.exceptions.RequestException as e:
-        error = str(e)
-    except Exception as e:
-        error = f"Unexpected error: {str(e)}"
-    
-    response_time = time.time() - start_time
-    
-    return {
-        'request_id': request_id,
-        'status_code': status_code,
-        'response_time': response_time,
-        'success': success,
-        'error': error,
-        'response_text': response_text
-    }
-
-
-def run_stress_test(
-    base_url: str,
-    endpoint: str,
-    num_requests: int,
-    concurrent_workers: int,
-    method: str = "GET",
-    payload: Optional[Dict] = None,
-    auth_token: Optional[str] = None,
-    delay_ms: int = 0
-) -> List[Dict]:
-    """Run concurrent stress test"""
-    results = []
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    with ThreadPoolExecutor(max_workers=concurrent_workers) as executor:
-        futures = []
-        
-        for i in range(num_requests):
-            if delay_ms > 0 and i > 0:
-                time.sleep(delay_ms / 1000.0)
-            
-            future = executor.submit(
-                make_request,
-                base_url=base_url,
-                endpoint=endpoint,
-                method=method,
-                payload=payload,
-                auth_token=auth_token,
-                request_id=i + 1
-            )
-            futures.append(future)
-        
-        completed = 0
-        for future in as_completed(futures):
-            result = future.result()
-            results.append(result)
-            completed += 1
-            progress_bar.progress(completed / num_requests)
-            status_text.text(f"Completed {completed}/{num_requests} requests...")
-    
-    progress_bar.empty()
-    status_text.empty()
-    
-    return results
-
-
-def load_page(
-    page_url: str,
-    auth_token: Optional[str] = None,
-    request_id: int = 0
-) -> Dict:
-    """Load a full page and return results"""
-    headers = {}
-    
-    if auth_token:
-        headers['Authorization'] = f'Bearer {auth_token}'
-    
-    # Set user agent to simulate browser
-    headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-    
-    start_time = time.time()
-    error = None
-    status_code = 0
-    response_text = ""
-    success = False
-    content_length = 0
-    
-    try:
-        response = requests.get(page_url, headers=headers, timeout=60, allow_redirects=True)
-        status_code = response.status_code
-        content_length = len(response.content)
-        response_text = response.text[:1000]  # Limit response text
-        success = status_code < 400
-        
-        # Check if Streamlit iframe is present (basic check)
-        has_streamlit_iframe = 'streamlit' in response.text.lower() or 'iframe' in response.text.lower()
-        
-    except requests.exceptions.Timeout:
-        error = "Page load timeout (60s)"
-    except requests.exceptions.ConnectionError:
-        error = "Connection error"
-    except requests.exceptions.RequestException as e:
-        error = str(e)
-    except Exception as e:
-        error = f"Unexpected error: {str(e)}"
-    
-    response_time = time.time() - start_time
-    
-    return {
-        'request_id': request_id,
-        'status_code': status_code,
-        'response_time': response_time,
-        'success': success,
-        'error': error,
-        'response_text': response_text,
-        'content_length': content_length
-    }
-
-
-def run_page_load_test(
-    page_url: str,
-    num_requests: int,
-    concurrent_workers: int,
-    auth_token: Optional[str] = None,
-    delay_ms: int = 0
-) -> List[Dict]:
-    """Run concurrent page load stress test"""
-    results = []
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    with ThreadPoolExecutor(max_workers=concurrent_workers) as executor:
-        futures = []
-        
-        for i in range(num_requests):
-            if delay_ms > 0 and i > 0:
-                time.sleep(delay_ms / 1000.0)
-            
-            future = executor.submit(
-                load_page,
-                page_url=page_url,
-                auth_token=auth_token,
-                request_id=i + 1
-            )
-            futures.append(future)
-        
-        completed = 0
-        for future in as_completed(futures):
-            result = future.result()
-            results.append(result)
-            completed += 1
-            progress_bar.progress(completed / num_requests)
-            status_text.text(f"Completed {completed}/{num_requests} page loads...")
-    
-    progress_bar.empty()
-    status_text.empty()
-    
-    return results
