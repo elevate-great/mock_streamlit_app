@@ -211,11 +211,8 @@ def run_page_load_test(
     
     return results
 
-# --- Verify all functions are defined (safety check)
-_required_functions = ['make_request', 'run_stress_test', 'load_page', 'run_page_load_test']
-_missing_functions = [f for f in _required_functions if f not in globals()]
-if _missing_functions:
-    raise RuntimeError(f"Missing required functions: {_missing_functions}")
+# All helper functions are now defined above this point
+# They are available at module level and will be accessible throughout the script
 
 # --- Streamlit UI Code
 st.set_page_config(page_title="Wagtail Stress Tester", page_icon="⚡", layout="wide")
